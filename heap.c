@@ -145,9 +145,35 @@ void* heap_realloc(void* memblock, size_t count) {
     return NULL;
 }
 
-//TODO: func to implement
+
+static void join_forward(Header__ *current) {
+    printf("JOINING");
+    Header__ *nxt = current->next;
+    current->mem_size += current->next->mem_size + CONTROL_STRUCT_SIZE + FENCE_LENGTH;
+    current->next = nxt->next;
+}
+
+
+static Header__* join_backward(Header__ *current) {
+    printf("BACKWARD");
+    Header__ *handler = current->prev;
+    handler->mem_size += current->mem_size + CONTROL_STRUCT_SIZE + FENCE_LENGTH;
+    handler->next = current->next;
+    return handler;
+}
+
+
+/* From [...cccfffUUUFFFcccfffUUUUFFF...] to [...cccfffUUUUUUUUUUUUUUUUFFF...] */
 void heap_free(void* memblock) {
+    if (!memblock) return;
+    Header__ *handler = (Header__*)((uint8_t*)memblock - FENCE_LENGTH - CONTROL_STRUCT_SIZE);
+    handler->is_free = true;
     
+    Header__ *nxt = handler->next;
+    Header__ *prv = handler->prev;
+
+    if (prv && prv->is_free) handler = join_backward(handler);
+    if (nxt && nxt->is_free) join_forward(handler);
 }
 
 //TODO: func to implement
