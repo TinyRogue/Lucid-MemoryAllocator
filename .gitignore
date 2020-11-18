@@ -1,0 +1,5 @@
+#Debug files
+out.dSYM/*
+
+#Objects
+*.o
