@@ -3,3 +3,23 @@ out.dSYM/*
 
 #Objects
 *.o
+
+#MacOS stuff
+.DS_Store
+
+
+#-----+Test+++Section+-------------------------------------------------------------------------------------
+#Cmake and Clion stuff
+cmake-build-debug/*
+.idea/*
+
+
+#Project configuration file for tests
+#This new makefile is used in purpose of tests, the uploaded already one to repository for running project
+CMakeLists.txt
+
+#Testing files
+rdebug.*
+tested_declarations.h
+unit_helper_v2.*
+unit_test_v2.c
