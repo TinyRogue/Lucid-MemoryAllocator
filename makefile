@@ -1,4 +1,4 @@
-cc=clang
+﻿cc=clang
 files=*.c
 output_filename=out
 arguments=
