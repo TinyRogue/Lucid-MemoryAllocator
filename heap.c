@@ -100,11 +100,6 @@ static void set_header(Header__ *header, const size_t mem_size, Header__ *prv, H
 }
 
 
-static void copy_fences(void *src, void *dst) {
-    memcpy(dst, src, FENCE_LENGTH);
-}
-
-
 static Header__* last() {
     if (!heap || !heap->head) return NULL;
     Header__ *iterator = heap->head;
@@ -127,7 +122,9 @@ static void split_headers(Header__ *current, size_t new_mem_size) {
 
     current->is_free = false;
     current->mem_size = new_mem_size;
-    copy_fences((uint8_t*)current->user_mem_ptr + current->mem_size, (uint8_t*)current->user_mem_ptr + prior_mem_size);
+    for (int i = 0; i < FENCE_LENGTH; i++) {
+        *((uint8_t*)current->user_mem_ptr + current->mem_size + i) = 'F';
+    }
     set_header(new_header, prior_mem_size - new_mem_size, current, current->next);
     blue();
     printf("Splitting header: size %lu, address %p into: size> %lu %lu, addresses> %p %p. Distance: %lld\n", prior_mem_size, (void*)current, current->mem_size, new_header->mem_size, (void*)current, (void*)new_header, calc_ptrs_distance(current, new_header));
@@ -172,10 +169,21 @@ void* heap_malloc(size_t size) {
             return iterator->user_mem_ptr;
         } else if (iterator->is_free && iterator->mem_size > HEADER_SIZE(size) + 1) { //At least one byte for splittedheader's user mem
             green();
-            printf("Found smaller, free block!\n");
+            printf("Found smaller, 'spiltable', free block!\n");
             printf("Allocating at: %p - user memory at: %p\n", (void*)iterator, (void*)iterator->user_mem_ptr);
             reset();
             split_headers(iterator, size);
+            return iterator->user_mem_ptr;
+        } else if (iterator->is_free && iterator->mem_size > size) {
+            green();
+            printf("Found smaller, 'not-spiltable', free block!\n");
+            printf("Allocating at: %p - user memory at: %p\n", (void*)iterator, (void*)iterator->user_mem_ptr);
+            reset();
+            //Set new size and put new right fences, lost memory will be reverted on heap_free()
+            iterator->mem_size = size;
+            for (int i = 0; i < FENCE_LENGTH; i++) {
+                *((uint8_t*)iterator->user_mem_ptr + iterator->mem_size + i) = 'F';
+            }
             return iterator->user_mem_ptr;
         }
         iterator = iterator->next;
@@ -246,6 +254,7 @@ void heap_free(void* memblock) {
 
     if (prv && prv->is_free) handler = join_backward(handler);
     if (nxt && nxt->is_free) join_forward(handler);
+    handler->mem_size = (intptr_t)handler->next - (intptr_t)handler - HEADER_SIZE(0);
 }
 
 //TODO: func to implement
