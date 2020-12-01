@@ -7,15 +7,15 @@
 void red();
 void bred();
 void green();
-void bgreen();
+void bold_green();
 void yellow();
-void byellow();
+void bold_yellow();
 void blue();
-void bblue();
+void bold_blue();
 void magenta();
-void bmagenta();
+void bold_magenta();
 void cyan();
-void bcyan();
+void bold_cyan();
 
 void reset();
 

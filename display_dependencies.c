@@ -1,6 +1,5 @@
 #include "display_dependencies.h"
-#include "tested_declarations.h"
-#include "rdebug.h"
+
 
 void red() {
     printf("\033[0;31m");
@@ -17,7 +16,7 @@ void green() {
 }
 
 
-void bgreen() {
+void bold_green() {
     printf("\033[1;32m");
 }
 
@@ -27,7 +26,7 @@ void yellow() {
 }
 
 
-void byellow() {
+void bold_yellow() {
     printf("\033[1;33m");
 }
 
@@ -37,7 +36,7 @@ void blue() {
 }
 
 
-void bblue() {
+void bold_blue() {
     printf("\033[1;34m");
 }
 
@@ -47,7 +46,7 @@ void magenta() {
 }
 
 
-void bmagenta() {
+void bold_magenta() {
     printf("\033[1;34m");
 }
 
@@ -57,7 +56,7 @@ void cyan() {
 }
 
 
-void bcyan() {
+void bold_cyan() {
     printf("\033[1;35m");
 }
 

@@ -7,7 +7,7 @@ static Heap__ *heap = NULL;
 
 static long long calc_ptrs_distance(void *ptr1, void *ptr2) {
     if (!ptr1 || !ptr2) return 0;
-    return llabs((long long)ptr1 - (long long)ptr2);
+    return llabs((intptr_t)ptr1 - (intptr_t)ptr2);
 }
 
 
@@ -59,8 +59,11 @@ int heap_validate(void) {
 
 
 void heap_clean(void) {
+    if (HEAP_UNINITIALIZED == heap_validate()) return;
     unsigned long mem_size = heap->pages * MY_PAGE_SIZE;
     memset(heap, 0x0, mem_size);
+    heap->head = NULL;
+    heap = NULL;
     custom_sbrk(-mem_size);
 }
 
@@ -116,21 +119,20 @@ static Header__* last() {
  * U - user's memory
  * F - right fence
 */
-static void split_headers(Header__ *current, size_t new_mem_size) {
-    Header__ *new_header = (Header__*)((uint8_t*)current->user_mem_ptr + new_mem_size + FENCE_LENGTH);
-    size_t prior_mem_size = current->mem_size;
+static void split_headers(Header__ *header_to_reduce, size_t new_mem_size) {
+    size_t prior_mem_size = header_to_reduce->mem_size;
+    Header__ *remaining_header = (Header__*)((uint8_t*)header_to_reduce->user_mem_ptr + new_mem_size + FENCE_LENGTH);
 
-    current->is_free = false;
-    current->mem_size = new_mem_size;
-    for (int i = 0; i < FENCE_LENGTH; i++) {
-        *((uint8_t*)current->user_mem_ptr + current->mem_size + i) = 'F';
-    }
-    set_header(new_header, prior_mem_size - new_mem_size, current, current->next);
+    header_to_reduce->is_free = false;
+    header_to_reduce->mem_size = new_mem_size;
+    fill_fences(header_to_reduce);
+
+    set_header(remaining_header, prior_mem_size - HEADER_SIZE(new_mem_size), header_to_reduce, header_to_reduce->next);
     blue();
-    printf("Splitting header: size %lu, address %p into: size> %lu %lu, addresses> %p %p. Distance: %lld\n", prior_mem_size, (void*)current, current->mem_size, new_header->mem_size, (void*)current, (void*)new_header, calc_ptrs_distance(current, new_header));
+    printf("Splitting header: size %lu, address %p into: size> %lu %lu, addresses> %p %p. Distance: %lld\n", prior_mem_size, (void*)header_to_reduce, header_to_reduce->mem_size, remaining_header->mem_size, (void*)header_to_reduce, (void*)remaining_header, calc_ptrs_distance(header_to_reduce, remaining_header));
     reset();
-    new_header->is_free = true;
-    current->next = new_header;
+    remaining_header->is_free = true;
+    header_to_reduce->next = remaining_header;
 }
 
 /* header - memory layout - control fences user_space fences  */
@@ -154,6 +156,7 @@ void* heap_malloc(size_t size) {
         printf("First block!\n");
         printf("Allocating at: %p - user memory at: %p\n", (void*)heap->head, (void*)heap->head->user_mem_ptr);
         reset();
+        display_heap();
         return heap->head->user_mem_ptr;
     }
 
@@ -166,6 +169,7 @@ void* heap_malloc(size_t size) {
             printf("Found perfect, free block with equal size!\n");
             printf("Allocating at: %p - user memory at: %p\n", (void*)iterator, (void*)iterator->user_mem_ptr);
             reset();
+            display_heap();
             return iterator->user_mem_ptr;
         } else if (iterator->is_free && iterator->mem_size > HEADER_SIZE(size) + 1) { //At least one byte for splittedheader's user mem
             green();
@@ -173,6 +177,7 @@ void* heap_malloc(size_t size) {
             printf("Allocating at: %p - user memory at: %p\n", (void*)iterator, (void*)iterator->user_mem_ptr);
             reset();
             split_headers(iterator, size);
+            display_heap();
             return iterator->user_mem_ptr;
         } else if (iterator->is_free && iterator->mem_size > size) {
             green();
@@ -184,6 +189,8 @@ void* heap_malloc(size_t size) {
             for (int i = 0; i < FENCE_LENGTH; i++) {
                 *((uint8_t*)iterator->user_mem_ptr + iterator->mem_size + i) = 'F';
             }
+            iterator->is_free = false;
+            display_heap();
             return iterator->user_mem_ptr;
         }
         iterator = iterator->next;
@@ -194,7 +201,7 @@ void* heap_malloc(size_t size) {
 
     long long free_mem_size = calc_ptrs_distance((uint8_t*)heap + heap->pages * MY_PAGE_SIZE, (uint8_t*)last_header->user_mem_ptr + last_header->mem_size + FENCE_LENGTH);
     if (free_mem_size <= (long long)(HEADER_SIZE(size))) {
-        bcyan();
+        bold_cyan();
         printf("Too little space. Upsizing.\nHaving: %lld Required: %lld - diff: %lld\n",
                free_mem_size, (long long)(HEADER_SIZE(size)), free_mem_size - (long long)HEADER_SIZE(size));
         reset();
@@ -208,6 +215,7 @@ void* heap_malloc(size_t size) {
     printf("Allocating at: %p - user memory at: %p\n", (void*)((uint8_t*)last_header->user_mem_ptr + last_header->mem_size + FENCE_LENGTH), (void*)((uint8_t*)last_header->user_mem_ptr + last_header->mem_size + FENCE_LENGTH + CONTROL_STRUCT_SIZE + FENCE_LENGTH));
     reset();
     set_header((Header__*)((uint8_t*)last_header->user_mem_ptr + last_header->mem_size + FENCE_LENGTH), size, last_header, NULL);
+    display_heap();
     return last()->user_mem_ptr;
 }
 
@@ -231,30 +239,40 @@ void* heap_realloc(void* memblock, size_t count) {
 
 static void join_forward(Header__ *current) {
     Header__ *nxt = current->next;
-    current->mem_size += current->next->mem_size + CONTROL_STRUCT_SIZE + FENCE_LENGTH;
+    current->mem_size += current->next->mem_size + CONTROL_STRUCT_SIZE + FENCE_LENGTH * 2;
     current->next = nxt->next;
+    heap->control_sum -= FENCE_LENGTH * 2;
+    heap->headers_allocated--;
 }
 
 
 static Header__* join_backward(Header__ *current) {
     Header__ *handler = current->prev;
-    handler->mem_size += current->mem_size + CONTROL_STRUCT_SIZE + FENCE_LENGTH;
+    handler->mem_size += current->mem_size + CONTROL_STRUCT_SIZE + FENCE_LENGTH * 2;
     handler->next = current->next;
+    heap->control_sum -= FENCE_LENGTH * 2;
+    heap->headers_allocated--;
     return handler;
 }
 
 /* From [...cccfffUUUFFFcccfffUUUUFFF...] to [...cccfffUUUUUUUUUUUUUUUUFFF...] */
 void heap_free(void* memblock) {
-    if (!memblock || get_pointer_type(memblock) != pointer_valid) return;
+    if (HEAP_UNINITIALIZED == heap_validate() || !memblock || get_pointer_type(memblock) != pointer_valid) return;
     Header__ *handler = (Header__*)((uint8_t*)memblock - FENCE_LENGTH - CONTROL_STRUCT_SIZE);
     handler->is_free = true;
+
+    bold_cyan();
+    printf("Freeing %p\n", (void*)handler);
+    reset();
 
     Header__ *nxt = handler->next;
     Header__ *prv = handler->prev;
 
     if (prv && prv->is_free) handler = join_backward(handler);
     if (nxt && nxt->is_free) join_forward(handler);
-    handler->mem_size = (intptr_t)handler->next - (intptr_t)handler - HEADER_SIZE(0);
+    if (handler->next) {
+        handler->mem_size = calc_ptrs_distance(handler->next, handler) - HEADER_SIZE(0);
+    }
 }
 
 //TODO: func to implement
@@ -275,7 +293,7 @@ void* heap_realloc_aligned(void* memblock, size_t size) {
 
 size_t heap_get_largest_used_block_size(void) {
 
-    if (!heap || !heap->head || !heap_validate()) return 0;
+    if (!heap || !heap->head || heap_validate()) return 0;
 
     size_t max = 0;
     Header__ *iterator = heap->head;
@@ -304,19 +322,18 @@ enum pointer_type_t get_pointer_type(const void* const pointer) {
         iterator = iterator->next;
     }
 
-    intptr_t left_fences = (intptr_t)((uint8_t*) iterator + FENCE_LENGTH);
-    intptr_t control_block = (intptr_t)((uint8_t*)iterator + FENCE_LENGTH + CONTROL_STRUCT_SIZE);
+    intptr_t control_block = (intptr_t)((uint8_t*)iterator + CONTROL_STRUCT_SIZE);
+    intptr_t left_fences = (intptr_t)((uint8_t*) iterator + FENCE_LENGTH + CONTROL_STRUCT_SIZE);
     intptr_t user_mem = (intptr_t)((uint8_t*)iterator->user_mem_ptr + iterator->mem_size);
     intptr_t right_fences = (intptr_t)((uint8_t*)iterator->user_mem_ptr + iterator->mem_size + FENCE_LENGTH);
 
-    if (ptr_handler < left_fences) return pointer_inside_fences;
-    else if (ptr_handler < control_block) return pointer_control_block;
+    if (ptr_handler < control_block) return pointer_control_block;
+    else if (ptr_handler < left_fences && !iterator->is_free) return pointer_inside_fences; // NOLINT(bugprone-branch-clone)
     else if (ptr_handler == (intptr_t)iterator->user_mem_ptr && !iterator->is_free) return pointer_valid;
-    else if (ptr_handler == (intptr_t)iterator->user_mem_ptr) return pointer_unallocated;
+    else if (ptr_handler == (intptr_t)iterator->user_mem_ptr) return pointer_unallocated;  // NOLINT(bugprone-branch-clone)
     else if (ptr_handler < user_mem && !iterator->is_free) return pointer_inside_data_block;
     else if (ptr_handler < user_mem) return pointer_unallocated;
-    else if (ptr_handler < right_fences) return pointer_inside_fences;
-
+    else if (ptr_handler < right_fences && !iterator->is_free) return pointer_inside_fences;
     return pointer_unallocated;
 }
 
@@ -327,7 +344,7 @@ void display_heap() {
     Header__ *iterator = heap->head;
     bred();
     printf("> Heap address %p\n", (void*)heap);
-    byellow();
+    bold_yellow();
     printf("> Heap pages: %lu. Heap headers: %lu. Heap control sum: %lu.\n", heap->pages, heap->headers_allocated, heap->control_sum);
 
     blue();
