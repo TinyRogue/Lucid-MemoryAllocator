@@ -28,8 +28,10 @@ struct header_t {
     struct header_t *prev;
     struct header_t *next;
     size_t mem_size;
-    bool is_free;
+    short is_free;
     void *user_mem_ptr;
+    short is_free_ref;
+    size_t mem_size_ref;
 } __attribute__((packed));
 
 typedef struct header_t Header__;
