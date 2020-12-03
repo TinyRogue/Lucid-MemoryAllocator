@@ -50,9 +50,105 @@ static unsigned long compute_control_sum() {
 }
 
 
+static bool contains(Header__* to_check) {
+    if (!to_check) return false;
+
+    Header__ *iterator = heap->head;
+    while (iterator) {
+        if (iterator == to_check) return true;
+        iterator = iterator->next;
+    }
+    return false;
+}
+
+
+static Header__* last() {
+    if (!heap || !heap->head) return NULL;
+    Header__ *iterator = heap->head;
+    while (iterator->next) iterator = iterator->next;
+    return iterator;
+}
+
+
+static bool reversed_contains(Header__* to_check) {
+    if (!to_check) return false;
+
+    Header__ *reversed_iterator = last();
+    while (reversed_iterator) {
+        if (reversed_iterator == to_check) return true;
+        reversed_iterator = reversed_iterator->prev;
+    }
+    return false;
+}
+
+
+static bool are_heap_ptrs_valid() {
+    Header__ *iterator = heap->head;
+    if (!iterator) return true;
+    while (iterator) {
+        if ((intptr_t)heap > (intptr_t)iterator
+            || (intptr_t)((uint8_t*)heap + heap->pages * PAGE_SIZE) < (intptr_t)iterator
+            || (intptr_t)((uint8_t*)heap + heap->pages * PAGE_SIZE) < (intptr_t)((uint8_t*)iterator + HEADER_SIZE(iterator->mem_size))) {
+            return false;
+        }
+        iterator = iterator->next;
+    }
+
+    Header__ *reversed_iterator = last();
+    while (reversed_iterator->prev) {
+        if (!contains(reversed_iterator->prev)) return false;
+        reversed_iterator = reversed_iterator->prev;
+    }
+
+    iterator = heap->head;
+    while (iterator) {
+        if (!reversed_contains(iterator)) return false;
+        iterator = iterator->next;
+    }
+    return true;
+}
+
+
+static bool are_user_ptrs_valid() {
+    Header__ *iterator = heap->head;
+    if (!iterator) return true;
+    while (iterator) {
+        if (calc_ptrs_distance((uint8_t*)iterator + CONTROL_STRUCT_SIZE + FENCE_LENGTH, iterator->user_mem_ptr) != 0) return false;
+        iterator = iterator->next;
+    }
+    return true;
+}
+
+
+static bool is_free_valid() {
+    Header__ *iterator = heap->head;
+    if (!iterator) return true;
+    while (iterator) {
+        if (iterator->is_free_ref != iterator->is_free) return false;
+        iterator = iterator->next;
+    }
+    return true;
+}
+
+
+static bool is_mem_size_valid() {
+    Header__ *iterator = heap->head;
+    if (!iterator) return true;
+    while (iterator) {
+        if (iterator->mem_size_ref != iterator->mem_size) return false;
+        iterator = iterator->next;
+    }
+    return true;
+}
+
+
 int heap_validate(void) {
     if (heap == NULL) return HEAP_UNINITIALIZED;
+    if (!are_heap_ptrs_valid()) return HEAP_CONTROL_STRUCT_BLUR;
     if (heap->headers_allocated != count_headers()) return HEAP_CONTROL_STRUCT_BLUR;
+    if (!are_user_ptrs_valid()) return HEAP_CONTROL_STRUCT_BLUR;
+    if (!is_free_valid()) return HEAP_CONTROL_STRUCT_BLUR;
+    if (!is_mem_size_valid()) return HEAP_CONTROL_STRUCT_BLUR;
     if (heap->control_sum != compute_control_sum()) return HEAP_CORRUPTED;
     return 0;
 }
@@ -91,8 +187,8 @@ static void fill_fences(Header__ *header) {
 
 
 static void set_header(Header__ *header, const size_t mem_size, Header__ *prv, Header__ *nxt) {
-    header->is_free = false;
-    header->mem_size = mem_size;
+    header->is_free = header->is_free_ref = false;
+    header->mem_size = header->mem_size_ref = mem_size;
     header->prev = prv;
     header->next = nxt;
     header->user_mem_ptr = (uint8_t*)header + CONTROL_STRUCT_SIZE + FENCE_LENGTH;
@@ -102,13 +198,6 @@ static void set_header(Header__ *header, const size_t mem_size, Header__ *prv, H
     update_heap_info();
 }
 
-
-static Header__* last() {
-    if (!heap || !heap->head) return NULL;
-    Header__ *iterator = heap->head;
-    while (iterator->next) iterator = iterator->next;
-    return iterator;
-}
 
 /*
  * From [.....cccfffUUUUUUUUUUUUUUFFF.......] to  [.....cccfffUUUFFF|cccfffUUFFF........]
@@ -123,15 +212,15 @@ static void split_headers(Header__ *header_to_reduce, size_t new_mem_size) {
     size_t prior_mem_size = header_to_reduce->mem_size;
     Header__ *remaining_header = (Header__*)((uint8_t*)header_to_reduce->user_mem_ptr + new_mem_size + FENCE_LENGTH);
 
-    header_to_reduce->is_free = false;
-    header_to_reduce->mem_size = new_mem_size;
+    header_to_reduce->is_free = header_to_reduce->is_free_ref = false;
+    header_to_reduce->mem_size = header_to_reduce->mem_size_ref = new_mem_size;
     fill_fences(header_to_reduce);
 
     set_header(remaining_header, prior_mem_size - HEADER_SIZE(new_mem_size), header_to_reduce, header_to_reduce->next);
     blue();
     printf("Splitting header: size %lu, address %p into: size> %lu %lu, addresses> %p %p. Distance: %lld\n", prior_mem_size, (void*)header_to_reduce, header_to_reduce->mem_size, remaining_header->mem_size, (void*)header_to_reduce, (void*)remaining_header, calc_ptrs_distance(header_to_reduce, remaining_header));
     reset();
-    remaining_header->is_free = true;
+    remaining_header->is_free = remaining_header->is_free_ref = true;
     header_to_reduce->next = remaining_header;
 }
 
@@ -164,7 +253,7 @@ void* heap_malloc(size_t size) {
     Header__ *iterator = heap->head;
     while (iterator) {
         if (iterator->is_free && iterator->mem_size == size) {
-            iterator->is_free = false;
+            iterator->is_free = iterator->is_free_ref = false;
             green();
             printf("Found perfect, free block with equal size!\n");
             printf("Allocating at: %p - user memory at: %p\n", (void*)iterator, (void*)iterator->user_mem_ptr);
@@ -185,11 +274,11 @@ void* heap_malloc(size_t size) {
             printf("Allocating at: %p - user memory at: %p\n", (void*)iterator, (void*)iterator->user_mem_ptr);
             reset();
             //Set new size and put new right fences, lost memory will be reverted on heap_free()
-            iterator->mem_size = size;
+            iterator->mem_size = iterator->mem_size_ref = size;
             for (int i = 0; i < FENCE_LENGTH; i++) {
                 *((uint8_t*)iterator->user_mem_ptr + iterator->mem_size + i) = 'F';
             }
-            iterator->is_free = false;
+            iterator->is_free = iterator->is_free_ref = false;
             display_heap();
             return iterator->user_mem_ptr;
         }
@@ -219,7 +308,7 @@ void* heap_malloc(size_t size) {
     return last()->user_mem_ptr;
 }
 
-//TODO: func to implement
+
 void* heap_calloc(size_t number, size_t size) {
     red();
     printf("Requested calloc for %lu memory.\n", number * size);
@@ -239,27 +328,35 @@ void* heap_realloc(void* memblock, size_t count) {
 
 static void join_forward(Header__ *current) {
     Header__ *nxt = current->next;
-    current->mem_size += current->next->mem_size + CONTROL_STRUCT_SIZE + FENCE_LENGTH * 2;
+    current->mem_size += HEADER_SIZE(nxt->mem_size);
+    current->mem_size_ref = current->mem_size;
     current->next = nxt->next;
+    if (nxt->next) {
+        nxt->next->prev = current;
+    }
     heap->control_sum -= FENCE_LENGTH * 2;
     heap->headers_allocated--;
 }
 
 
 static Header__* join_backward(Header__ *current) {
-    Header__ *handler = current->prev;
-    handler->mem_size += current->mem_size + CONTROL_STRUCT_SIZE + FENCE_LENGTH * 2;
-    handler->next = current->next;
+    Header__ *prv = current->prev;
+    prv->mem_size += HEADER_SIZE(current->mem_size);
+    prv->mem_size_ref = prv->mem_size;
+    prv->next = current->next;
+    if (current->next) {
+        current->next->prev = prv;
+    }
     heap->control_sum -= FENCE_LENGTH * 2;
     heap->headers_allocated--;
-    return handler;
+    return prv;
 }
 
 /* From [...cccfffUUUFFFcccfffUUUUFFF...] to [...cccfffUUUUUUUUUUUUUUUUFFF...] */
 void heap_free(void* memblock) {
     if (HEAP_UNINITIALIZED == heap_validate() || !memblock || get_pointer_type(memblock) != pointer_valid) return;
     Header__ *handler = (Header__*)((uint8_t*)memblock - FENCE_LENGTH - CONTROL_STRUCT_SIZE);
-    handler->is_free = true;
+    handler->is_free = handler->is_free_ref = true;
 
     bold_cyan();
     printf("Freeing %p\n", (void*)handler);
@@ -271,7 +368,7 @@ void heap_free(void* memblock) {
     if (prv && prv->is_free) handler = join_backward(handler);
     if (nxt && nxt->is_free) join_forward(handler);
     if (handler->next) {
-        handler->mem_size = calc_ptrs_distance(handler->next, handler) - HEADER_SIZE(0);
+        handler->mem_size = handler->mem_size_ref = calc_ptrs_distance(handler->next, handler) - HEADER_SIZE(0);
     }
 }
 
