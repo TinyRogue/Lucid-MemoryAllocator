@@ -6,6 +6,7 @@
 #include <string.h>                 /* For memcpy() */
 #include <stdio.h>                  /* For logging with printf funcs */
 #include <inttypes.h>               /* For uintptr_t */
+#include <assert.h>                 /* For testing */
 #include "custom_unistd.h"          /* For (custom_)sbrk function, required for project */
 #include "display_dependencies.h"   /* For colourful terminal messages */
 
@@ -73,5 +74,6 @@ size_t heap_get_largest_used_block_size(void);
 enum pointer_type_t get_pointer_type(const void* pointer);
 
 void display_heap();
+void display_mem();
 
 #endif
