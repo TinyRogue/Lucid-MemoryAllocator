@@ -6,7 +6,7 @@
 #include <string.h>                 /* For memcpy() */
 #include <stdio.h>                  /* For logging with printf funcs */
 #include <inttypes.h>               /* For uintptr_t */
-#include <assert.h>                 /* For testing */
+//#include <assert.h>                 /* For testing */
 #include "custom_unistd.h"          /* For (custom_)sbrk function, required for project */
 #include "display_dependencies.h"   /* For colourful terminal messages */
 
