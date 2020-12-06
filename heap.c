@@ -289,7 +289,7 @@ void* heap_calloc(size_t number, size_t size) {
 
 
 void* heap_realloc(void* memblock, size_t count) {
-    if (count < 0 || (!memblock && !count) || heap_validate()) return NULL;
+    if ((long long)count < 0 || (!memblock && !count) || heap_validate()) return NULL;
     if (!memblock) return heap_malloc(count);
     if (get_pointer_type(memblock) != pointer_valid) return NULL;
     if (count == 0) return heap_free(memblock), NULL;
@@ -493,9 +493,86 @@ void* heap_calloc_aligned(size_t number, size_t size) {
     return handler;
 }
 
-//TODO: func to implement
+
 void* heap_realloc_aligned(void* memblock, size_t size) {
-    return NULL;
+    if (size < 0 || (!memblock && !size) || heap_validate()) return NULL;
+    if (!memblock) return heap_malloc_aligned(size);
+    if (get_pointer_type(memblock) != pointer_valid) return NULL;
+    if (size == 0) return heap_free(memblock), NULL;
+    Header__ *handler = (Header__*)((uint8_t*)memblock - FENCE_LENGTH - CONTROL_STRUCT_SIZE);
+
+    if (size < handler->mem_size) {
+        handler->mem_size = handler->mem_size_ref = size;
+        fill_fences(handler);
+        assert(heap_validate() == 0 && "Decreasing header failed::realloc");
+        return handler->user_mem_ptr;
+    } else if (size == handler->mem_size) {
+        assert(heap_validate() == 0 && "Same size failed::realloc");
+        return handler->user_mem_ptr;
+    }
+
+    if (!handler->next) {
+        long long left_mem = calc_ptrs_distance((uint8_t *) handler->user_mem_ptr + handler->mem_size,
+                                                (uint8_t *) heap + heap->pages * MY_PAGE_SIZE - FENCE_LENGTH);
+        assert(left_mem >= 0 && "left_mem lower than zero::no next block::realloc");
+
+        if (left_mem < (long long) size) {
+            int pages_to_allocate = (int) ((long long) size - left_mem) / MY_PAGE_SIZE +
+                                    ((((long long) size - left_mem) / MY_PAGE_SIZE) % MY_PAGE_SIZE != 0);
+            pages_to_allocate = pages_to_allocate == 0 ? 1 : pages_to_allocate;
+            if (REQUEST_SPACE_FAIL == request_more_space(pages_to_allocate)) return NULL;
+        }
+        assert(handler == last() && "isn't really last");
+        handler->mem_size = handler->mem_size_ref = size;
+        fill_fences(handler);
+        assert(heap_validate() == 0 && "Extending at the end failed");
+        return handler->user_mem_ptr;
+
+    } else if (calc_ptrs_distance(handler->user_mem_ptr, handler->next) - FENCE_LENGTH > (long long)size) {
+        handler->mem_size = handler->mem_size_ref = size;
+        fill_fences(handler);
+        return handler->user_mem_ptr;
+    } else if (handler->next->is_free && handler->mem_size + handler->next->mem_size > size) {
+        Header__ *reduced = (Header__*)((uint8_t*)handler->user_mem_ptr + size + FENCE_LENGTH);
+        long long reduced_size = (long long)(handler->mem_size + handler->next->mem_size - size);
+        assert(reduced_size > 0 && "Reduced header size under zero! Math went absolutely wrong.");
+        Header__ copy;
+        memcpy(&copy, handler->next, sizeof(Header__));
+        reduced->next = copy.next;
+        if (copy.next) copy.next->prev = reduced;
+        reduced->prev= handler;
+        reduced->mem_size = reduced->mem_size_ref = reduced_size;
+        reduced->is_free = reduced->is_free_ref = true;
+        reduced->user_mem_ptr = (uint8_t*)reduced + FENCE_LENGTH + CONTROL_STRUCT_SIZE;
+        fill_fences(reduced);
+        handler->next = reduced;
+        assert(heap_validate() == 0 && "Reducing failed::reduced block failed::realloc");
+        handler->mem_size = handler->mem_size_ref = size;
+        fill_fences(handler);
+        assert(heap_validate() == 0 && "Reducing failed::handler block failed::realloc");
+        return handler->user_mem_ptr;
+    } else if (handler->next->is_free && calc_ptrs_distance(handler->user_mem_ptr, (uint8_t*)handler->next->user_mem_ptr + handler->next->mem_size) > (long long)size) {
+        long long available_size = calc_ptrs_distance(handler->user_mem_ptr, (uint8_t*)handler->next->user_mem_ptr + handler->next->mem_size);
+        if (handler->next->next) assert(available_size < calc_ptrs_distance(handler->user_mem_ptr, handler->next->next) && "Size of block AB cannot be longer than AC!\nRealloc::erasing header B failed.");
+        if (handler->next->next) handler->next->next->prev = handler;
+        handler->next = handler->next->next;
+        handler->mem_size = handler->mem_size_ref = size;
+        fill_fences(handler);
+        heap->control_sum -= 6;
+        heap->headers_allocated--;
+        assert(heap_validate() == 0 && "Erasing header failed!::realloc");
+        return handler->user_mem_ptr;
+    }
+
+    void *ptr = heap_malloc_aligned(size);
+    if (!ptr) {
+        return NULL;
+    }
+
+    memcpy(ptr, handler->user_mem_ptr, handler->mem_size);
+    heap_free(handler->user_mem_ptr);
+    assert(heap_validate() == 0 && "Reallocating to end wrong! heap!");
+    return ptr;
 }
 
 
