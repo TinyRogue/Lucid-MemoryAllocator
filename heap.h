@@ -6,19 +6,17 @@
 #include <string.h>                 /* For memcpy() */
 #include <stdio.h>                  /* For logging with printf funcs */
 #include <inttypes.h>               /* For uintptr_t */
-//#include <assert.h>                 /* For testing */
 #include "custom_unistd.h"          /* For (custom_)sbrk function, required for project */
 #include "display_dependencies.h"   /* For colourful terminal messages */
 
 
 #define FENCE_LENGTH 0x3
-#define KB 0x400
 #define MY_PAGE_SIZE 0x1000
 #define CONTROL_STRUCT_SIZE sizeof(Header__)
-#define HEADER_SIZE(size) (CONTROL_STRUCT_SIZE + size + 2 * FENCE_LENGTH)
+#define HEADER_SIZE(size) (CONTROL_STRUCT_SIZE + (size) + 2 * FENCE_LENGTH)
 
-#define SBRK_FAIL (void*)-1
-#define HEAP_INIT_FAIL -1
+#define SBRK_FAIL (void*)(-1)
+#define HEAP_INIT_FAIL (-1)
 #define REQUEST_SPACE_FAIL HEAP_INIT_FAIL
 
 #define HEAP_CORRUPTED 1
@@ -31,8 +29,7 @@ struct header_t {
     size_t mem_size;
     short is_free;
     void *user_mem_ptr;
-    short is_free_ref;
-    size_t mem_size_ref;
+    long long control_sum;
 } __attribute__((packed));
 
 typedef struct header_t Header__;
@@ -72,8 +69,5 @@ void* heap_realloc_aligned(void* memblock, size_t size);
 
 size_t heap_get_largest_used_block_size(void);
 enum pointer_type_t get_pointer_type(const void* pointer);
-
-void display_heap();
-void display_mem();
 
 #endif
